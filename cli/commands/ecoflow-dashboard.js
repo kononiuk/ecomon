@@ -48,9 +48,10 @@ function transformGridHistory(history) {
     const bucket = hourlyBuckets.get(label) || { connected: 0, total: 0 };
 
     titles.push(label);
-    // Use 1 for connected, 0 for disconnected (binary height)
-    data.push(bucket.connected > bucket.total / 2 ? 1 : 0);
-    colors.push(bucket.connected > bucket.total / 2 ? 'green' : 'red');
+    // Use 1 for connected, 0.1 for disconnected (so red bars are visible)
+    const isConnected = bucket.connected > bucket.total / 2;
+    data.push(isConnected ? 1 : 0.1);
+    colors.push(isConnected ? 'green' : 'red');
   }
 
   return {
@@ -131,10 +132,10 @@ const cmd = new Command('dashboard')
       // Grid connection bar chart (middle-top - 3 rows)
       const gridBar = grid.set(5, 0, 3, 12, contrib.bar, {
         label: ` Grid Connection History - Last 24 Hours `,
-        barWidth: 4,
-        barSpacing: 2,
+        barWidth: 3,
+        barSpacing: 1,
         xOffset: 0,
-        maxHeight: 1  // Binary: connected (1) or disconnected (0)
+        maxHeight: 1  // Binary: connected (1) or disconnected (0.1)
       });
 
       // Device info box (middle-bottom - 3 rows)
