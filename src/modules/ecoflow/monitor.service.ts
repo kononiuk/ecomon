@@ -289,6 +289,7 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
         clientId,
         username: mqttCreds.certificateAccount,
         password: mqttCreds.certificatePassword,
+        certificateAccount: mqttCreds.certificateAccount,
       };
 
       await this.mqttService.connect(credentials);
