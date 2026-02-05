@@ -179,6 +179,9 @@ const cmd = new Command('dashboard')
 
       // ── Step 5: Initialize chart data ────────────────────────────────────────
 
+      // Sort history by timestamp (ascending - oldest first)
+      history.sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime());
+
       // Power graph data arrays
       const timeLabels = history.map(h => formatTime(h.recordedAt));
       const inputSeries = history.map(h => h.inputWatts || 0);
