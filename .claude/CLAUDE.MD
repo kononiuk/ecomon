@@ -10,25 +10,63 @@
 
 ```
 src/
-├── common/           # Shared utilities, decorators, filters, guards, interceptors, pipes
-│   ├── decorators/   # Custom decorators
-│   ├── filters/      # Exception filters
-│   ├── guards/       # Authorization guards
-│   ├── interceptors/ # Request/response interceptors
-│   ├── pipes/        # Validation and transformation pipes
-│   └── utils/        # Utility functions
-├── config/           # Configuration files and environment setup
-├── modules/          # Feature modules (each domain has its own folder)
-│   └── [module-name]/
-│       ├── dto/      # Data Transfer Objects
-│       ├── entities/ # TypeORM entities
-│       ├── [module].controller.ts
-│       ├── [module].service.ts
-│       ├── [module].module.ts
-│       └── tests/
-├── shared/           # Shared modules used across multiple features
-├── main.ts           # Application entry point
-└── app.module.ts     # Root module
+├── common/
+│   ├── decorators/
+│   │   └── current-user.decorator.ts
+│   └── services/
+│       └── encryption.service.ts          # AES-256-GCM helper
+├── modules/
+│   ├── audit/
+│   │   ├── entities/
+│   │   │   └── audit-log.entity.ts
+│   │   ├── audit.module.ts
+│   │   └── audit.service.ts
+│   ├── auth/
+│   │   ├── dto/                           # register / login / change-password DTOs
+│   │   ├── entities/                      # User, RefreshToken
+│   │   ├── guards/                        # JwtAuthGuard
+│   │   ├── strategies/                    # Passport JWT strategy
+│   │   ├── auth.controller.ts
+│   │   ├── auth.module.ts
+│   │   └── auth.service.ts
+│   └── ecoflow/
+│       ├── dto/
+│       │   ├── device-command.dto.ts
+│       │   ├── device-status.dto.ts       # parsed status response shape
+│       │   └── store-credentials.dto.ts
+│       ├── entities/
+│       │   ├── device-status-history.entity.ts  # time-series data points
+│       │   ├── ecoflow-credential.entity.ts     # encrypted access/secret keys
+│       │   └── monitor-state.entity.ts          # persisted start/stop state + device filter
+│       ├── ecoflow.controller.ts          # all /ecoflow/* REST endpoints
+│       ├── ecoflow.module.ts
+│       ├── ecoflow.service.ts             # credential CRUD, device list, ownership check
+│       ├── device-status.service.ts       # raw → DeviceStatusDto parser
+│       ├── history.service.ts             # record / query / delete history rows
+│       ├── history-cleanup.service.ts     # @Cron daily cleanup
+│       ├── monitor.service.ts             # orchestrator: REST poll loop + MQTT lifecycle
+│       └── mqtt.service.ts                # MQTT connect / subscribe / disconnect
+├── app.module.ts                          # root module (imports ScheduleModule)
+├── app.controller.ts
+├── app.service.ts
+└── main.ts                                # bootstrap + Swagger + global pipes
+
+cli/
+├── ecomon.js                              # Commander entry-point; builds command tree
+├── api.js                                 # thin HTTP layer with transparent token refresh
+├── session.js                             # ~/.ecomon/session.json (chmod 0600)
+├── prompt.js                              # interactive input helpers
+└── commands/
+    ├── init.js                            # guided first-time setup
+    ├── login.js / logout.js
+    ├── auth-change-password.js
+    ├── ecoflow-init.js                    # store EcoFlow API credentials
+    ├── ecoflow-devices.js
+    ├── ecoflow-status.js                  # live status (parsed + --raw)
+    ├── ecoflow-command.js
+    ├── ecoflow-monitor-start.js           # start monitoring (--devices flag)
+    ├── ecoflow-monitor-stop.js
+    └── ecoflow-monitor-status.js
 ```
 
 ## TypeScript Configuration
@@ -251,6 +289,56 @@ export class AppService {
 }
 ```
 
+## Hybrid Monitor Architecture
+
+The monitor subsystem collects device telemetry via two transports and merges
+them into a single `device_status_history` table.
+
+### Transport: REST polling
+- `MonitorService.pollOnce()` iterates `activeDeviceSns`, calls
+  `RestClient.getDevicePropertiesPlain(sn)` for each, unwraps the SDK envelope,
+  and writes a row via `HistoryService.recordDataPoint({ source: 'rest' })`.
+- Interval is `ECOFLOW_POLL_INTERVAL` ms (default 60 000).
+- Per-device errors are logged but do **not** kill the loop.
+
+### Transport: MQTT push
+- `MqttService` connects to `mqtt-e.ecoflow.com:8883` (mqtts).
+- Credentials come from `RestClient.getMqttCredentials()` which returns
+  `{ certificateAccount, certificatePassword, url, port, protocol }`.
+  A `clientId` is generated locally (`ecomon_<uuid>`);
+  `certificateAccount` → username, `certificatePassword` → password.
+- Topic pattern: `/app/device/property/<SN>` — the SN is extracted at index [4].
+- MQTT failure is **non-fatal** — REST polling continues alone.
+- Credentials are refreshed every `MQTT_CRED_REFRESH_INTERVAL` ms (default 6 h)
+  by disconnecting, fetching new creds, and reconnecting.
+
+### Deduplication
+SQL-level, not in-memory.  Before inserting a row `HistoryService` checks
+whether a row for the same `deviceSn` exists within the last 2 seconds
+(`recordedAt > now - 2s`).  Survives restarts.
+
+### Device selection (`--devices` flag)
+- `MonitorState.devices` (jsonb, nullable).  `null` = all devices.
+- Persisted before `startMonitoring()` is called, so `onModuleInit()` can
+  resume with the same filter after a restart.
+- When `devices` is non-null the cloud device-list round-trip is skipped.
+
+### Lifecycle & persistence
+- `MonitorState` entity stores one row per user: `isRunning`, `devices`,
+  `startedAt`, `stoppedAt`.
+- `onModuleInit()` scans for rows where `isRunning = true` and auto-resumes.
+  On failure the row is flipped to stopped.
+- `onModuleDestroy()` tears down poll interval + MQTT before the process exits.
+
+### Auto-cleanup
+`HistoryCleanupService` runs a single `@Cron('0 3 * * *')` job (03:00 UTC).
+It deletes rows older than `HISTORY_RETENTION_DAYS` (default 7) regardless of
+monitor state — it is a maintenance task, not part of the monitor loop.
+
+### CLI sub-group
+Commands live in `cli/commands/ecoflow-monitor-{start,stop,status}.js` and are
+auto-discovered by `ecomon.js` into the nested `ecomon ecoflow monitor` group.
+
 ## PostgreSQL & TypeORM Guidelines
 
 ### Database Connection
@@ -284,7 +372,7 @@ export class AppService {
 
 ### Setup
 - Swagger is configured at `/api` endpoint
-- Access Swagger UI at `http://localhost:3000/api`
+- Access Swagger UI at `http://localhost:3030/api`
 
 ### Decorators
 - `@ApiTags('tag-name')` - Group endpoints
@@ -358,12 +446,36 @@ async findOne(id: string): Promise<Device> {
 ### Required Variables
 ```
 NODE_ENV=development
-PORT=3000
+PORT=3030
 DATABASE_HOST=localhost
 DATABASE_PORT=5432
 DATABASE_USER=postgres
 DATABASE_PASSWORD=postgres
 DATABASE_NAME=ecomon
+
+# JWT
+JWT_SECRET=<generated>
+JWT_EXPIRATION=15m
+JWT_REFRESH_SECRET=<generated>
+JWT_REFRESH_EXPIRATION=7d
+
+# Encryption (AES-256-GCM key, 32 bytes hex)
+ENCRYPTION_KEY=<generated>
+
+# Rate limiting
+RATE_LIMIT_TTL=60
+RATE_LIMIT_MAX=100
+
+# CORS
+CORS_ORIGIN=http://localhost:3000,http://localhost:3030
+
+# EcoFlow API
+ECOFLOW_API_HOST=https://api-e.ecoflow.com
+ECOFLOW_POLL_INTERVAL=60000           # REST poll cadence in ms (default 60 s)
+
+# History & Monitor
+HISTORY_RETENTION_DAYS=7              # daily cleanup removes rows older than this
+MQTT_CRED_REFRESH_INTERVAL=21600000   # MQTT credential re-fetch interval in ms (default 6 h)
 ```
 
 ### Best Practices
