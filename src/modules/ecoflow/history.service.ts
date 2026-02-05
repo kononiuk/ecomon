@@ -73,26 +73,86 @@ export class HistoryService {
     };
   }
 
+  // ── deduplication ───────────────────────────────────────────────────────────
+  /**
+   * Returns true when inserting this point would be a duplicate.
+   *
+   * REST  – any row with the same deviceSn in the last 2 s.
+   * MQTT  – any row with the same deviceSn AND same typeCode in the last 2 s.
+   *         Different module packets (bmsStatus, mpptStatus, …) are never
+   *         considered duplicates of each other.
+   */
+  private async isDuplicatePoint(
+    point: DataPoint,
+    since: Date,
+  ): Promise<boolean> {
+    if (point.source === 'rest') {
+      // REST: simple check — any row (any source) for this device in 2 s.
+      const row = await this.historyRepository.findOne({
+        where: {
+          deviceSn: point.deviceSn,
+          source: 'rest',
+          recordedAt: MoreThan(since),
+        },
+        order: { recordedAt: 'DESC' },
+      });
+      return row !== null;
+    }
+
+    // MQTT: only dedup against rows with the same typeCode.
+    const typeCode =
+      typeof point.rawProps['typeCode'] === 'string'
+        ? point.rawProps['typeCode']
+        : null;
+
+    if (!typeCode) {
+      // No typeCode in the packet — fall back to source-only dedup.
+      const row = await this.historyRepository.findOne({
+        where: {
+          deviceSn: point.deviceSn,
+          source: 'mqtt',
+          recordedAt: MoreThan(since),
+        },
+        order: { recordedAt: 'DESC' },
+      });
+      return row !== null;
+    }
+
+    // Match on deviceSn + source='mqtt' + rawSnapshot->>'typeCode' + time window.
+    const count = await this.historyRepository
+      .createQueryBuilder('h')
+      .where('h."deviceSn" = :sn', { sn: point.deviceSn })
+      .andWhere('h.source = :src', { src: 'mqtt' })
+      .andWhere("h.\"rawSnapshot\"->>'typeCode' = :tc", { tc: typeCode })
+      .andWhere('h."recordedAt" > :since', { since })
+      .getCount();
+
+    return count > 0;
+  }
+
   // ── write ───────────────────────────────────────────────────────────────────
   /**
-   * Persist one history row.  Returns null when the insert is skipped because
-   * a row for the same deviceSn already exists within the last 2 seconds
-   * (deduplication — guards against MQTT burst duplicates).
+   * Persist one history row.  Returns null when the insert is skipped by the
+   * deduplication guard.
+   *
+   * Dedup rules (SQL-level, survives restarts):
+   *   REST  – skip if another REST row for the same deviceSn exists within 2 s.
+   *   MQTT  – skip if another MQTT row with the same deviceSn AND the same
+   *           typeCode exists within 2 s.  Different module packets (e.g.
+   *           bmsStatus vs mpptStatus) are distinct data and are never deduped
+   *           against each other.
    */
   async recordDataPoint(point: DataPoint): Promise<DeviceStatusHistory | null> {
     const twoSecondsAgo = new Date(Date.now() - 2_000);
 
-    const recent = await this.historyRepository.findOne({
-      where: {
-        deviceSn: point.deviceSn,
-        recordedAt: MoreThan(twoSecondsAgo),
-      },
-      order: { recordedAt: 'DESC' },
-    });
-
-    if (recent) {
+    const isDuplicate = await this.isDuplicatePoint(point, twoSecondsAgo);
+    if (isDuplicate) {
+      const tc =
+        typeof point.rawProps['typeCode'] === 'string'
+          ? ` [${point.rawProps['typeCode']}]`
+          : '';
       this.logger.debug(
-        `Dedup: skipping ${point.source} point for ${point.deviceSn}`,
+        `Dedup: skipping ${point.source}${tc} point for ${point.deviceSn}`,
       );
       return null;
     }
