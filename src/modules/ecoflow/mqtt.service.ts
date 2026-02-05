@@ -8,6 +8,12 @@ export interface MqttCredentials {
   clientId: string;
   username: string;
   password: string;
+  /**
+   * The certificateAccount value returned by /iot-open/sign/certification.
+   * Used as the middle segment of the Open-IoT topic:
+   *   /open/<certificateAccount>/<deviceSn>/quota
+   */
+  certificateAccount: string;
 }
 
 @Injectable()
@@ -16,6 +22,8 @@ export class MqttService implements OnModuleDestroy {
 
   private client: mqtt.MqttClient | null = null;
   private subscribedTopics: string[] = [];
+  /** Cached from connect() — used to build Open-IoT subscribe topics */
+  private certificateAccount: string = '';
 
   constructor(private readonly historyService: HistoryService) {}
 
@@ -31,6 +39,8 @@ export class MqttService implements OnModuleDestroy {
       this.logger.warn('connect() called while already connected — disconnecting first');
       await this.disconnect();
     }
+
+    this.certificateAccount = creds.certificateAccount;
 
     this.client = mqtt.connect(creds.url, {
       clientId: creds.clientId,
@@ -65,8 +75,8 @@ export class MqttService implements OnModuleDestroy {
   /**
    * Register the on-message handler.  Must be called once after connect().
    *
-   * Topic layout:  /app/device/property/<SERIAL_NUMBER>
-   * After split('/'): ['', 'app', 'device', 'property', '<SN>']  →  index 4
+   * Topic layout (Open IoT):  /open/<certificateAccount>/<SERIAL_NUMBER>/quota
+   * After split('/'): ['', 'open', '<certAccount>', '<SN>', 'quota']  →  index 3
    *
    * The handler fires-and-forgets the DB write so the MQTT event loop is
    * never blocked.  Errors are caught and logged.
@@ -76,7 +86,7 @@ export class MqttService implements OnModuleDestroy {
 
     this.client.on('message', (topic: string, payload: Buffer) => {
       try {
-        const deviceSn = topic.split('/')[4];
+        const deviceSn = topic.split('/')[3];
         if (!deviceSn) {
           this.logger.warn(`Unrecognised MQTT topic: ${topic}`);
           return;
@@ -99,12 +109,13 @@ export class MqttService implements OnModuleDestroy {
   }
 
   /**
-   * Subscribe to the property topic for one device.
+   * Subscribe to the Open-IoT quota topic for one device.
+   * Topic: /open/<certificateAccount>/<deviceSn>/quota
    */
   async subscribe(deviceSn: string): Promise<void> {
     if (!this.client) throw new Error('MqttService: not connected');
 
-    const topic = `/app/device/property/${deviceSn}`;
+    const topic = `/open/${this.certificateAccount}/${deviceSn}/quota`;
 
     await new Promise<void>((resolve, reject) => {
       this.client!.subscribe(topic, (err) => {
@@ -129,6 +140,7 @@ export class MqttService implements OnModuleDestroy {
     await this.client.endAsync();
     this.client = null;
     this.subscribedTopics = [];
+    this.certificateAccount = '';
     this.logger.log('Disconnected from EcoFlow MQTT broker');
   }
 

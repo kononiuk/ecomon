@@ -307,7 +307,8 @@ them into a single `device_status_history` table.
   `{ certificateAccount, certificatePassword, url, port, protocol }`.
   A `clientId` is generated locally (`ecomon_<uuid>`);
   `certificateAccount` → username, `certificatePassword` → password.
-- Topic pattern: `/app/device/property/<SN>` — the SN is extracted at index [4].
+- Topic pattern (Open IoT): `/open/<certificateAccount>/<SN>/quota` — the SN is extracted at index [3].
+  (`/app/device/property/<SN>` is the App-MQTT namespace for the mobile app; the developer Open IoT API uses `/open/…`)
 - MQTT failure is **non-fatal** — REST polling continues alone.
 - Credentials are refreshed every `MQTT_CRED_REFRESH_INTERVAL` ms (default 6 h)
   by disconnecting, fetching new creds, and reconnecting.
