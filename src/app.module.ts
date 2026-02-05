@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { CommonModule } from './common/common.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -42,6 +43,7 @@ import { AppService } from './app.service';
         },
       ],
     }),
+    ScheduleModule.forRoot(),
     AuthModule,
     AuditModule,
     EcoflowModule,
