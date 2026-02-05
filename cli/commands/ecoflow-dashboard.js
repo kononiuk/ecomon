@@ -131,8 +131,9 @@ const cmd = new Command('dashboard')
 
       // Power line graph (top - 7 rows)
       const powerLine = grid.set(0, 0, 7, 12, contrib.line, {
-        label: ` Power (Watts) - Last 24 Hours  │ Green=Input  Cyan=Output `,
+        label: ` Power (Watts) - Last 24 Hours  │ {green-fg}Input{/green-fg}  {cyan-fg}Output{/cyan-fg} `,
         showLegend: false,
+        tags: true,
         xLabelPadding: 3,
         xPadding: 5,
         wholeNumbersOnly: false,
