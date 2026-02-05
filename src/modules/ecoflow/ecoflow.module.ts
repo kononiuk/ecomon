@@ -4,7 +4,6 @@ import { EcoflowService } from './ecoflow.service';
 import { EcoflowController } from './ecoflow.controller';
 import { DeviceStatusService } from './device-status.service';
 import { HistoryService } from './history.service';
-import { MqttService } from './mqtt.service';
 import { MonitorService } from './monitor.service';
 import { HistoryCleanupService } from './history-cleanup.service';
 import { EcoFlowCredential } from './entities/ecoflow-credential.entity';
@@ -26,7 +25,6 @@ import { AuthModule } from '../auth/auth.module';
     EcoflowService,
     DeviceStatusService,
     HistoryService,
-    MqttService,
     MonitorService,
     HistoryCleanupService,
   ],

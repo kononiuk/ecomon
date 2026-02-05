@@ -9,7 +9,6 @@ import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { RestClient } from '@ecoflow-api/rest-client';
 import { EcoflowService } from './ecoflow.service';
-import { MqttService, MqttCredentials } from './mqtt.service';
 import { HistoryService } from './history.service';
 import { MonitorState } from './entities/monitor-state.entity';
 
@@ -20,23 +19,19 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
   // ── runtime state ───────────────────────────────────────────────────────────
   /** REST poll interval handle; null when not polling */
   private pollHandle: ReturnType<typeof setInterval> | null = null;
-  /** MQTT credential-refresh interval handle */
-  private mqttRefreshHandle: ReturnType<typeof setInterval> | null = null;
   /** Which user's credentials are active */
   private activeUserId: string | null = null;
-  /** Device serial numbers currently being polled / subscribed */
+  /** Device serial numbers currently being polled */
   private activeDeviceSns: string[] = [];
 
   // ── env-driven config (read once at construction) ───────────────────────────
   private readonly pollIntervalMs: number;
   private readonly apiHost: string;
-  private readonly mqttCredRefreshMs: number;
 
   constructor(
     @InjectRepository(MonitorState)
     private readonly monitorStateRepo: Repository<MonitorState>,
     private readonly ecoflowService: EcoflowService,
-    private readonly mqttService: MqttService,
     private readonly historyService: HistoryService,
     private readonly configService: ConfigService,
   ) {
@@ -47,11 +42,6 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
     this.apiHost =
       this.configService.get<string>('ECOFLOW_API_HOST') ||
       'https://api-e.ecoflow.com';
-    this.mqttCredRefreshMs = parseInt(
-      this.configService.get<string>('MQTT_CRED_REFRESH_INTERVAL') ||
-        String(6 * 60 * 60 * 1_000),
-      10,
-    );
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────────
@@ -85,8 +75,6 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     this.stopPolling();
-    this.stopMqttRefresh();
-    await this.mqttService.disconnect();
   }
 
   // ── public API (called by controller) ───────────────────────────────────────
@@ -147,8 +135,6 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
     await this.monitorStateRepo.save(state);
 
     this.stopPolling();
-    this.stopMqttRefresh();
-    await this.mqttService.disconnect();
     this.activeUserId = null;
     this.activeDeviceSns = [];
 
@@ -168,7 +154,7 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
    * Shared start logic — called by start() and by onModuleInit() on resume.
    * Does NOT touch the DB row (caller already persisted).
    *
-   * @param filterSns – if non-null, only these SNs are polled / subscribed.
+   * @param filterSns – if non-null, only these SNs are polled.
    *                    if null, every device returned by the EcoFlow API is used.
    */
   private async startMonitoring(userId: string, filterSns: string[] | null = null): Promise<void> {
@@ -192,12 +178,6 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
 
     // 2. REST poll loop
     this.startPolling(userId);
-
-    // 3. MQTT (non-fatal if it fails)
-    await this.connectMqtt(userId);
-
-    // 4. Periodic MQTT credential refresh
-    this.startMqttRefresh(userId);
   }
 
   // ── REST polling ────────────────────────────────────────────────────────────
@@ -260,70 +240,4 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ── MQTT ────────────────────────────────────────────────────────────────────
-
-  /**
-   * Obtain MQTT credentials via the official RestClient method, then connect
-   * and subscribe to every active device.  The entire block is wrapped in
-   * try/catch — MQTT failure is non-fatal; REST polling continues alone.
-   */
-  private async connectMqtt(userId: string): Promise<void> {
-    try {
-      const creds = await this.ecoflowService.getActiveCredential(userId);
-      const client = new RestClient({
-        accessKey: creds.accessKey,
-        secretKey: creds.secretKey,
-        host: this.apiHost,
-      });
-
-      // RestClient.getMqttCredentials() calls GET /iot-open/sign/certification
-      // Returns { certificateAccount, certificatePassword, url, port, protocol }
-      const mqttCreds = await client.getMqttCredentials();
-
-      // clientId is not returned by EcoFlow — generate a unique one per connection
-      const crypto = await import('crypto');
-      const clientId = `ecomon_${crypto.randomUUID().replace(/-/g, '')}`;
-
-      const credentials: MqttCredentials = {
-        url: `${mqttCreds.protocol}://${mqttCreds.url}:${mqttCreds.port}`,
-        clientId,
-        username: mqttCreds.certificateAccount,
-        password: mqttCreds.certificatePassword,
-        certificateAccount: mqttCreds.certificateAccount,
-      };
-
-      await this.mqttService.connect(credentials);
-      this.mqttService.setupMessageHandler();
-
-      for (const sn of this.activeDeviceSns) {
-        await this.mqttService.subscribe(sn);
-      }
-    } catch (err) {
-      this.logger.error('MQTT connect failed (REST polling continues)', (err as Error).message);
-    }
-  }
-
-  /**
-   * Periodically reconnect MQTT with fresh credentials.
-   * EcoFlow MQTT credentials have a TTL of several hours; this timer
-   * defaults to 6 hours (MQTT_CRED_REFRESH_INTERVAL env var).
-   */
-  private startMqttRefresh(userId: string): void {
-    if (this.mqttRefreshHandle) {
-      clearInterval(this.mqttRefreshHandle);
-    }
-
-    this.mqttRefreshHandle = setInterval(async () => {
-      this.logger.log('Refreshing MQTT credentials…');
-      await this.mqttService.disconnect();
-      await this.connectMqtt(userId);
-    }, this.mqttCredRefreshMs);
-  }
-
-  private stopMqttRefresh(): void {
-    if (this.mqttRefreshHandle) {
-      clearInterval(this.mqttRefreshHandle);
-      this.mqttRefreshHandle = null;
-    }
-  }
 }
