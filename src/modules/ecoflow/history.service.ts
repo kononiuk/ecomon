@@ -21,9 +21,19 @@ export class HistoryService {
 
   // ── field extraction ────────────────────────────────────────────────────────
   /**
-   * Pull the four scalar fields out of the flat raw-properties object.
+   * Pull the four scalar fields out of the raw-properties object.
+   * Handles two shapes transparently:
+   *
+   * 1. REST quota (flat, literal-dot keys):
+   *      { "pd.soc": 100, "pd.wattsInSum": 61, … }
+   *
+   * 2. MQTT Open-IoT module packet (nested params):
+   *      { typeCode: "pdStatus", params: { soc: 100, wattsInSum: 61, … } }
+   *      { typeCode: "bmsStatus", params: { soc: 100, … } }
+   *      Other typeCodes (mpptStatus, invStatus) don't carry these fields —
+   *      the scalars correctly fall through to 0 / false for those packets.
+   *
    * Key paths are kept in sync with DeviceStatusService's FIELD_EXTRACTORS.
-   * Raw keys contain literal dots — bracket notation only.
    */
   private extractFields(rawProps: Record<string, unknown>): {
     batteryPercent: number;
@@ -31,17 +41,35 @@ export class HistoryService {
     outputWatts: number;
     gridConnected: boolean;
   } {
+    // If this is an MQTT module packet, pull params out; otherwise use the
+    // top-level object directly (REST flat format).
+    const params =
+      typeof rawProps['params'] === 'object' && rawProps['params'] !== null
+        ? (rawProps['params'] as Record<string, unknown>)
+        : null;
+
     return {
       batteryPercent: Number(
-        rawProps['pd.soc'] ?? rawProps['bms_bmsStatus.soc'] ?? 0,
+        rawProps['pd.soc'] ??
+          rawProps['bms_bmsStatus.soc'] ??
+          params?.['soc'] ??
+          0,
       ),
       inputWatts: Number(
-        rawProps['pd.wattsInSum'] ?? rawProps['inv.inputWatts'] ?? 0,
+        rawProps['pd.wattsInSum'] ??
+          rawProps['inv.inputWatts'] ??
+          params?.['wattsInSum'] ??
+          0,
       ),
       outputWatts: Number(
-        rawProps['pd.wattsOutSum'] ?? rawProps['inv.outputWatts'] ?? 0,
+        rawProps['pd.wattsOutSum'] ??
+          rawProps['inv.outputWatts'] ??
+          params?.['wattsOutSum'] ??
+          0,
       ),
-      gridConnected: rawProps['bms_emsStatus.chgLinePlug'] === 1,
+      gridConnected:
+        rawProps['bms_emsStatus.chgLinePlug'] === 1 ||
+        params?.['chgLinePlug'] === 1,
     };
   }
 
