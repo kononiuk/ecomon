@@ -133,7 +133,10 @@ const cmd = new Command('dashboard')
       const powerLine = grid.set(0, 0, 7, 12, contrib.line, {
         label: ` Power (Watts) - Last 24 Hours `,
         showLegend: true,
-        legend: { width: 20 },
+        legend: {
+          width: 12,
+          position: 'top-left'
+        },
         xLabelPadding: 3,
         xPadding: 5,
         wholeNumbersOnly: false,
