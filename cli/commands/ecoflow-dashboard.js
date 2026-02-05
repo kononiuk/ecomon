@@ -129,8 +129,8 @@ const cmd = new Command('dashboard')
 
       // ── Step 4: Create widgets ───────────────────────────────────────────────
 
-      // Power line graph (top - 4 rows)
-      const powerLine = grid.set(0, 0, 4, 12, contrib.line, {
+      // Power line graph (top - 3 rows)
+      const powerLine = grid.set(0, 0, 3, 12, contrib.line, {
         label: ` Power (Watts) - Last 24 Hours `,
         showLegend: true,
         legend: { width: 20 },
@@ -144,8 +144,8 @@ const cmd = new Command('dashboard')
         }
       });
 
-      // Grid connection timeline (middle-top - 1 row)
-      const gridTimeline = grid.set(4, 0, 1, 12, blessed.box, {
+      // Grid connection timeline (middle-top - 2 rows)
+      const gridTimeline = grid.set(3, 0, 2, 12, blessed.box, {
         label: ` Grid Connection Timeline `,
         content: '',
         tags: true,
@@ -155,7 +155,7 @@ const cmd = new Command('dashboard')
         }
       });
 
-      // Device info box (middle-bottom - 6 rows)
+      // Device info box (middle - 6 rows)
       const infoBox = grid.set(5, 0, 6, 12, blessed.box, {
         label: ` Device Information `,
         content: '',
