@@ -134,8 +134,7 @@ const cmd = new Command('dashboard')
         label: ` Power (Watts) - Last 24 Hours `,
         showLegend: true,
         legend: {
-          width: 12,
-          position: 'top-left'
+          width: 12
         },
         xLabelPadding: 3,
         xPadding: 5,
