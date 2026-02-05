@@ -82,6 +82,13 @@ module.exports = {
   monitorStart:   (devices)            => authed('POST',   '/ecoflow/monitor/start', devices ? { body: { devices } } : {}),
   monitorStop:    ()                   => authed('DELETE',  '/ecoflow/monitor/stop'),
   monitorStatus:  ()                   => authed('GET',    '/ecoflow/monitor/status'),
+  getHistory:     (deviceSn, from, to, limit) => {
+    const params = new URLSearchParams({ deviceSn });
+    if (from) params.append('from', from);
+    if (to) params.append('to', to);
+    if (limit) params.append('limit', limit.toString());
+    return authed('GET', `/ecoflow/monitor/history?${params}`);
+  },
 
   // Audit
   getAudit:       ()                   => authed('GET',  '/audit'),   // placeholder – extend later
