@@ -9,6 +9,8 @@ import { ConfigService } from '@nestjs/config';
 import { RestClient } from '@ecoflow-api/rest-client';
 import { EncryptionService } from '../../common/services/encryption.service';
 import { AuditService } from '../audit/audit.service';
+import { DeviceStatusService } from './device-status.service';
+import { DeviceStatusDto } from './dto/device-status.dto';
 import { EcoFlowCredential } from './entities/ecoflow-credential.entity';
 import { StoreCredentialsDto } from './dto/store-credentials.dto';
 
@@ -22,6 +24,7 @@ export class EcoflowService {
     private encryptionService: EncryptionService,
     private auditService: AuditService,
     private configService: ConfigService,
+    private deviceStatusService: DeviceStatusService,
   ) {
     this.apiHost =
       this.configService.get<string>('ECOFLOW_API_HOST') ||
@@ -121,10 +124,26 @@ export class EcoflowService {
   async getDeviceQuota(
     userId: string,
     deviceSn: string,
-  ): Promise<any> {
-    await this.verifyDeviceOwnership(userId, deviceSn);
+    includeRaw: boolean = false,
+  ): Promise<DeviceStatusDto> {
+    const deviceName = await this.verifyDeviceOwnership(userId, deviceSn);
     const client = await this.getApiClient(userId);
-    return client.getDevicePropertiesPlain(deviceSn);
+    const response = await client.getDevicePropertiesPlain(deviceSn);
+
+    // The EcoFlow SDK wraps properties inside an envelope; the flat key-value
+    // pairs live under .data (or .result.result in some SDK versions).
+    const rawProps: Record<string, unknown> =
+      (response as any)?.data ??
+      (response as any)?.result?.result ??
+      (response as any) ??
+      {};
+
+    const parsed = this.deviceStatusService.parse(rawProps, deviceName);
+    if (includeRaw) {
+      parsed.raw = rawProps;
+    }
+
+    return parsed;
   }
 
   async sendDeviceCommand(
@@ -156,18 +175,20 @@ export class EcoflowService {
   private async verifyDeviceOwnership(
     userId: string,
     deviceSn: string,
-  ): Promise<void> {
+  ): Promise<string> {
     const devices = await this.getDeviceList(userId);
 
-    const deviceExists = devices.data?.some(
-      (device: any) => device.sn === deviceSn,
+    const device = devices.data?.find(
+      (d: any) => d.sn === deviceSn,
     );
 
-    if (!deviceExists) {
+    if (!device) {
       throw new ForbiddenException(
         'Device not found or you do not have access to it',
       );
     }
+
+    return (device.deviceName ?? device.productName ?? 'Unknown Device') as string;
   }
 
   async deleteCredentials(

@@ -1,16 +1,38 @@
 /**
- * ecomon ecoflow status <deviceSn>
- * Pulls live status from the device and prints the key metrics.
+ * ecomon ecoflow status <deviceSn> [--raw]
+ *
+ * Default : shows the server-parsed summary (name, charge, watts, grid).
+ * --raw   : dumps the full unprocessed EcoFlow properties object.
+ *
+ * Adding a new display field later = one line in the FIELDS array below.
  */
 const { Command } = require('commander');
 const chalk      = require('chalk');
 const api        = require('../api');
 
+// ── declarative display fields ───────────────────────────────────────────────
+// Each entry maps one value from the parsed DeviceStatusDto to a formatted row.
+// `path` uses dot notation resolved against the response body.
+const FIELDS = [
+  { path: 'name',            label: 'Device',       unit: '',   fmt: (v) => chalk.bold(v) },
+  { path: 'charge.percent',  label: 'Battery',      unit: '%',  fmt: (v) => (v >= 50 ? chalk.green(v) : v >= 20 ? chalk.yellow(v) : chalk.red(v)) },
+  { path: 'inputWatts',      label: 'Input power',  unit: 'W'  },
+  { path: 'outputWatts',     label: 'Output power', unit: 'W'  },
+  { path: 'gridConnected',   label: 'Grid',         unit: '',   fmt: (v) => v ? chalk.green('Connected') : chalk.dim('Disconnected') },
+];
+
+/** Resolve a dot-separated path against an object (e.g. "charge.percent") */
+function get(obj, path) {
+  return path.split('.').reduce((o, k) => o?.[k], obj);
+}
+
+// ── command ──────────────────────────────────────────────────────────────────
 const cmd = new Command('status')
   .description('Show live status of a device')
   .argument('<deviceSn>', 'Device serial number (from: ecomon ecoflow devices)')
-  .action(async (deviceSn) => {
-    const res = await api.getStatus(deviceSn);
+  .option('--raw', 'Return the original unprocessed EcoFlow response')
+  .action(async (deviceSn, opts) => {
+    const res = await api.getStatus(deviceSn, { raw: opts.raw });
 
     if (res.status === 403) {
       console.log(chalk.red('\n  ❌  Device not found or access denied\n'));
@@ -21,37 +43,22 @@ const cmd = new Command('status')
       process.exit(1);
     }
 
-    // The EcoFlow API nests properties under .data or returns them flat — handle both
-    const props = res.body?.result?.result ?? res.body?.data ?? res.body;
-
     console.log(chalk.cyan(`\n  Live status — ${deviceSn}\n`));
     console.log(chalk.dim('  ' + '─'.repeat(44)));
 
-    // Pretty-print known fields with labels, then dump the rest
-    const known = {
-      bmsSoC:       { label: 'Battery',       unit: '%',  fmt: (v) => (v >= 50 ? chalk.green(v) : v >= 20 ? chalk.yellow(v) : chalk.red(v)) },
-      inPower:      { label: 'Input power',   unit: 'W'  },
-      outPower:     { label: 'Output power',  unit: 'W'  },
-      chargeState:  { label: 'Charge state',  unit: '',   fmt: (v) => ({ 0: chalk.green('Charging'), 1: chalk.yellow('Discharging'), 2: chalk.dim('Idle') })[v] ?? String(v) },
-      temp:         { label: 'Temperature',   unit: '°C' },
-      remainMinute: { label: 'Time remain',   unit: 'min' },
-    };
-
-    const printed = new Set();
-    for (const [key, meta] of Object.entries(known)) {
-      if (props[key] !== undefined) {
-        const val = meta.fmt ? meta.fmt(props[key]) : props[key];
-        console.log(`  ${chalk.dim((meta.label + ':').padEnd(18))} ${val} ${chalk.dim(meta.unit)}`);
-        printed.add(key);
-      }
-    }
-
-    // Dump remaining fields in dim
-    const rest = Object.entries(props).filter(([k]) => !printed.has(k));
-    if (rest.length > 0) {
-      console.log(chalk.dim('\n  ── raw properties ──'));
-      for (const [k, v] of rest) {
+    if (opts.raw) {
+      // ── raw mode: dump every key/value from the raw sub-object ──────────
+      const raw = res.body?.raw ?? res.body;
+      for (const [k, v] of Object.entries(raw)) {
         console.log(chalk.dim(`  ${k}: ${JSON.stringify(v)}`));
+      }
+    } else {
+      // ── parsed mode: iterate FIELDS ─────────────────────────────────────
+      for (const field of FIELDS) {
+        const value = get(res.body, field.path);
+        if (value === undefined || value === null) continue;
+        const display = field.fmt ? field.fmt(value) : value;
+        console.log(`  ${chalk.dim((field.label + ':').padEnd(18))} ${display} ${chalk.dim(field.unit)}`);
       }
     }
 

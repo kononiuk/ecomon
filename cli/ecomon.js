@@ -11,6 +11,9 @@
  *   ecomon ecoflow devices                  – list devices
  *   ecomon ecoflow status <sn>              – live device status
  *   ecomon ecoflow command <sn> <json>      – send command
+ *   ecomon ecoflow monitor start            – start data collection
+ *   ecomon ecoflow monitor stop             – stop data collection
+ *   ecomon ecoflow monitor status           – show monitor state
  *
  * Architecture
  *   • Top-level ("flat") commands live in cli/commands/<name>.js
@@ -57,9 +60,20 @@ for (const file of flatFiles) {
 const ecoflow = new Command('ecoflow')
   .description('Manage EcoFlow power station integration');
 
-for (const file of loadGlob('ecoflow-')) {
+// Direct ecoflow sub-commands — exclude ecoflow-monitor-* (those nest one level deeper)
+for (const file of loadGlob('ecoflow-').filter(f => !f.startsWith('ecoflow-monitor-'))) {
   ecoflow.addCommand(loadCommand(file));
 }
+
+// ── ecoflow monitor sub-group ────────────────────────────────────────────────
+const monitor = new Command('monitor')
+  .description('Start, stop, and inspect device data collection');
+
+for (const file of loadGlob('ecoflow-monitor-')) {
+  monitor.addCommand(loadCommand(file));
+}
+
+ecoflow.addCommand(monitor);
 
 program.addCommand(ecoflow);
 

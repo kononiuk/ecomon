@@ -5,6 +5,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
   Req,
   HttpCode,
@@ -20,6 +21,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 import { EcoflowService } from './ecoflow.service';
+import { MonitorService } from './monitor.service';
+import { HistoryService } from './history.service';
 import { StoreCredentialsDto } from './dto/store-credentials.dto';
 import { DeviceCommandDto } from './dto/device-command.dto';
 
@@ -28,7 +31,11 @@ import { DeviceCommandDto } from './dto/device-command.dto';
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth('JWT')
 export class EcoflowController {
-  constructor(private readonly ecoflowService: EcoflowService) {}
+  constructor(
+    private readonly ecoflowService: EcoflowService,
+    private readonly monitorService: MonitorService,
+    private readonly historyService: HistoryService,
+  ) {}
 
   @Post('credentials')
   @ApiOperation({ summary: 'Store EcoFlow API credentials (encrypted)' })
@@ -80,8 +87,9 @@ export class EcoflowController {
   async getDeviceStatus(
     @CurrentUser() user: User,
     @Param('deviceSn') deviceSn: string,
+    @Query('raw') raw?: string,
   ) {
-    return this.ecoflowService.getDeviceQuota(user.id, deviceSn);
+    return this.ecoflowService.getDeviceQuota(user.id, deviceSn, raw === 'true');
   }
 
   @Post('devices/:deviceSn/command')
@@ -106,6 +114,56 @@ export class EcoflowController {
       dto.params,
       ipAddress,
       userAgent,
+    );
+  }
+
+  // ── monitor control ───────────────────────────────────────────────────────
+
+  @Post('monitor/start')
+  @ApiOperation({ summary: 'Start hybrid device monitoring (REST + MQTT)' })
+  @ApiResponse({ status: 200, description: 'Monitor started or already running' })
+  async monitorStart(
+    @CurrentUser() user: User,
+    @Body('devices') devices?: string[],
+  ) {
+    return this.monitorService.start(user.id, devices);
+  }
+
+  @Delete('monitor/stop')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Stop device monitoring' })
+  @ApiResponse({ status: 200, description: 'Monitor stopped or was not running' })
+  async monitorStop(@CurrentUser() user: User) {
+    return this.monitorService.stop(user.id);
+  }
+
+  @Get('monitor/status')
+  @ApiOperation({ summary: 'Get current monitor state (running / stopped)' })
+  @ApiResponse({ status: 200, description: 'MonitorState object or null' })
+  async monitorStatus(@CurrentUser() user: User) {
+    return this.monitorService.getStatus(user.id);
+  }
+
+  // ── history ───────────────────────────────────────────────────────────────
+
+  @Get('monitor/history')
+  @ApiOperation({ summary: 'Query device status history' })
+  @ApiResponse({ status: 200, description: 'Array of DeviceStatusHistory rows' })
+  async getHistory(
+    @CurrentUser() user: User,
+    @Query('deviceSn') deviceSn: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+  ) {
+    // Validate that the user has active credentials (implicitly checks access)
+    await this.ecoflowService.getDeviceList(user.id);
+
+    return this.historyService.getHistory(
+      deviceSn,
+      from ? new Date(from) : undefined,
+      to ? new Date(to) : undefined,
+      limit ? parseInt(limit, 10) : undefined,
     );
   }
 }

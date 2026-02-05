@@ -75,8 +75,13 @@ module.exports = {
 
   // EcoFlow – devices
   getDevices:     ()                   => authed('GET',  '/ecoflow/devices'),
-  getStatus:      (sn)                 => authed('GET',  `/ecoflow/devices/${sn}/status`),
+  getStatus:      (sn, { raw = false } = {}) => authed('GET',  `/ecoflow/devices/${sn}/status${raw ? '?raw=true' : ''}`),
   sendCommand:    (sn, params)         => authed('POST', `/ecoflow/devices/${sn}/command`, { body: { params } }),
+
+  // EcoFlow – monitor
+  monitorStart:   (devices)            => authed('POST',   '/ecoflow/monitor/start', devices ? { body: { devices } } : {}),
+  monitorStop:    ()                   => authed('DELETE',  '/ecoflow/monitor/stop'),
+  monitorStatus:  ()                   => authed('GET',    '/ecoflow/monitor/status'),
 
   // Audit
   getAudit:       ()                   => authed('GET',  '/audit'),   // placeholder – extend later
