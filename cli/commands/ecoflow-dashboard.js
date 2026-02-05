@@ -17,48 +17,63 @@ function formatTime(isoString) {
 }
 
 /**
- * Transform historical data into grid connection bar chart data
- * Groups data by hour and shows green/red bars based on majority connection state
+ * Generate horizontal timeline bar showing grid connection status
+ * Returns formatted string with colored blocks for connected/disconnected periods
  */
-function transformGridHistory(history) {
-  // Group by hour and check if grid was connected during that hour
-  const hourlyBuckets = new Map();
-
-  history.forEach(point => {
-    const hour = new Date(point.recordedAt).getHours();
-    const label = `${hour.toString().padStart(2, '0')}:00`;
-
-    if (!hourlyBuckets.has(label)) {
-      hourlyBuckets.set(label, { connected: 0, total: 0 });
-    }
-
-    const bucket = hourlyBuckets.get(label);
-    bucket.total++;
-    if (point.gridConnected) bucket.connected++;
-  });
-
-  // Convert to bar chart format
-  const titles = [];
-  const data = [];
-  const colors = [];
-
-  // Ensure we have all 24 hours (fill missing hours with 0)
-  for (let h = 0; h < 24; h++) {
-    const label = `${h.toString().padStart(2, '0')}:00`;
-    const bucket = hourlyBuckets.get(label) || { connected: 0, total: 0 };
-
-    titles.push(label);
-    // Use 1 for connected, 0.1 for disconnected (so red bars are visible)
-    const isConnected = bucket.connected > bucket.total / 2;
-    data.push(isConnected ? 1 : 0.1);
-    colors.push(isConnected ? 'green' : 'red');
+function generateGridTimeline(history) {
+  if (history.length === 0) {
+    return '{red-fg}' + '━'.repeat(96) + '{/red-fg} (no data yet)';
   }
 
-  return {
-    titles,
-    data,
-    barColor: colors
-  };
+  // Sort by time
+  const sorted = [...history].sort((a, b) =>
+    new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime()
+  );
+
+  // Group consecutive same-state periods
+  const segments = [];
+  let currentState = sorted[0].gridConnected;
+  let startTime = new Date(sorted[0].recordedAt);
+
+  sorted.forEach((point, idx) => {
+    if (point.gridConnected !== currentState || idx === sorted.length - 1) {
+      segments.push({
+        connected: currentState,
+        start: startTime,
+        end: new Date(point.recordedAt)
+      });
+      currentState = point.gridConnected;
+      startTime = new Date(point.recordedAt);
+    }
+  });
+
+  // Calculate total time span
+  const firstTime = new Date(sorted[0].recordedAt).getTime();
+  const lastTime = new Date(sorted[sorted.length - 1].recordedAt).getTime();
+  const totalDuration = lastTime - firstTime || 1;
+
+  // Generate visual bar (96 chars wide for good resolution)
+  const barWidth = 96;
+  let timeline = '';
+
+  segments.forEach(seg => {
+    const segStart = new Date(seg.start).getTime();
+    const segEnd = new Date(seg.end).getTime();
+    const segDuration = segEnd - segStart;
+    const segWidth = Math.max(1, Math.round((segDuration / totalDuration) * barWidth));
+
+    const color = seg.connected ? 'green-fg' : 'red-fg';
+    timeline += `{${color}}` + '━'.repeat(segWidth) + `{/${color}}`;
+  });
+
+  // Add time labels
+  const startLabel = formatTime(sorted[0].recordedAt);
+  const endLabel = formatTime(sorted[sorted.length - 1].recordedAt);
+  const duration = Math.round((totalDuration / 1000 / 60)); // minutes
+
+  return timeline + `\n{cyan-fg}${startLabel}{/cyan-fg}` +
+         ' '.repeat(barWidth - startLabel.length - endLabel.length - 2) +
+         `{cyan-fg}${endLabel}{/cyan-fg}  ({yellow-fg}${duration} min{/yellow-fg})`;
 }
 
 /**
@@ -129,13 +144,15 @@ const cmd = new Command('dashboard')
         }
       });
 
-      // Grid connection bar chart (middle-top - 3 rows)
-      const gridBar = grid.set(5, 0, 3, 12, contrib.bar, {
-        label: ` Grid Connection History - Last 24 Hours `,
-        barWidth: 3,
-        barSpacing: 1,
-        xOffset: 0,
-        maxHeight: 1  // Binary: connected (1) or disconnected (0.1)
+      // Grid connection timeline (middle-top - 3 rows)
+      const gridTimeline = grid.set(5, 0, 3, 12, blessed.box, {
+        label: ` Grid Connection Timeline `,
+        content: '',
+        tags: true,
+        style: {
+          fg: 'white',
+          border: { fg: 'yellow' }
+        }
       });
 
       // Device info box (middle-bottom - 3 rows)
@@ -183,9 +200,8 @@ const cmd = new Command('dashboard')
         }
       ]);
 
-      // Set initial grid connection bar chart
-      const gridData = transformGridHistory(history);
-      gridBar.setData(gridData);
+      // Set initial grid connection timeline
+      gridTimeline.setContent('\n' + generateGridTimeline(history));
 
       // ── Step 6: Helper function to update footer ─────────────────────────────
       function updateFooter(message, color = 'white') {
@@ -269,9 +285,8 @@ const cmd = new Command('dashboard')
             }
           ]);
 
-          // Refresh grid bar chart with updated data
-          const gridData = transformGridHistory(history);
-          gridBar.setData(gridData);
+          // Refresh grid connection timeline
+          gridTimeline.setContent('\n' + generateGridTimeline(history));
 
           // Update device info box
           infoBox.setContent(
