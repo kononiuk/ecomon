@@ -17,8 +17,11 @@ A security-first NestJS application for monitoring EcoFlow DELTA Series power st
 ### API Features
 - ✅ User registration and authentication
 - ✅ Encrypted EcoFlow credential storage
-- ✅ Device listing and status monitoring
+- ✅ Device listing and status monitoring (parsed + raw modes)
 - ✅ Device command execution
+- ✅ Hybrid device monitoring (REST polling + MQTT push)
+- ✅ Per-device monitoring selection via `--devices` flag
+- ✅ Time-series history storage with configurable auto-cleanup
 - ✅ Swagger API documentation
 
 ## Prerequisites
@@ -140,9 +143,24 @@ Authorization: Bearer {accessToken}
 
 ### 5. Get Device Status
 
+Returns server-parsed summary by default.  Append `?raw=true` to get the full
+unprocessed EcoFlow properties object instead.
+
 ```bash
 GET /ecoflow/devices/{deviceSn}/status
+GET /ecoflow/devices/{deviceSn}/status?raw=true
 Authorization: Bearer {accessToken}
+```
+
+Parsed response shape:
+```json
+{
+  "name": "DELTA 2",
+  "charge": { "percent": 85 },
+  "inputWatts": 400,
+  "outputWatts": 120,
+  "gridConnected": true
+}
 ```
 
 ### 6. Send Device Command
@@ -162,6 +180,97 @@ Content-Type: application/json
   }
 }
 ```
+
+### 7. Start Monitoring
+
+Starts the hybrid data-collection loop (REST poll every 60 s + MQTT push).
+Omit `devices` to monitor every device on the account; provide an array to
+limit monitoring to specific serial numbers.  The selection is persisted —
+if the server restarts the monitor auto-resumes with the same device set.
+
+```bash
+POST /ecoflow/monitor/start
+Authorization: Bearer {accessToken}
+Content-Type: application/json
+
+{
+  "devices": ["HW52XXXXXXXX", "HW52YYYYYYYY"]   ← optional
+}
+```
+
+Response:
+```json
+{
+  "message": "Monitor started",
+  "startedAt": "2025-06-15T10:30:00.000Z",
+  "devices": ["HW52XXXXXXXX", "HW52YYYYYYYY"]   // null when monitoring all
+}
+```
+
+### 8. Stop Monitoring
+
+Stops all active monitoring (both REST and MQTT) for the authenticated user.
+
+```bash
+DELETE /ecoflow/monitor/stop
+Authorization: Bearer {accessToken}
+```
+
+### 9. Monitor Status
+
+Returns the persisted state of the monitor (running / stopped, timestamps,
+and which devices are being watched).
+
+```bash
+GET /ecoflow/monitor/status
+Authorization: Bearer {accessToken}
+```
+
+### 10. Query History
+
+Retrieves recorded data-points for a device.  All parameters except
+`deviceSn` are optional.  Results are returned newest-first, capped at
+`limit` rows (default 200).
+
+```bash
+GET /ecoflow/monitor/history?deviceSn=HW52XXXXXXXX&from=2025-06-01T00:00:00Z&to=2025-06-15T23:59:59Z&limit=100
+Authorization: Bearer {accessToken}
+```
+
+---
+
+## CLI Reference
+
+EcoMon ships a command-line client (`ecomon`) that talks to the local API.
+
+### Authentication
+
+```bash
+ecomon init                          # guided first-time setup (register + credentials)
+ecomon login                         # interactive login
+ecomon logout                        # revoke refresh token
+ecomon auth change-password          # change password interactively
+```
+
+### EcoFlow – Devices
+
+```bash
+ecomon ecoflow devices               # list all devices on the account
+ecomon ecoflow status <SN>           # show parsed live status
+ecomon ecoflow status <SN> --raw     # dump full raw EcoFlow properties
+ecomon ecoflow command <SN> <JSON>   # send a command to a device
+```
+
+### EcoFlow – Monitor
+
+```bash
+ecomon ecoflow monitor start                        # start monitoring all devices
+ecomon ecoflow monitor start --devices SN1,SN2      # monitor only the listed SNs
+ecomon ecoflow monitor stop                         # stop all monitoring
+ecomon ecoflow monitor status                       # show current monitor state
+```
+
+---
 
 ## Security Best Practices
 
