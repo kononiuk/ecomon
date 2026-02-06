@@ -90,9 +90,6 @@ module.exports = {
     return authed('GET', `/ecoflow/monitor/history?${params}`);
   },
 
-  // Audit
-  getAudit:       ()                   => authed('GET',  '/audit'),   // placeholder – extend later
-
   // internals exposed for login flow
   _session: session,
 };
