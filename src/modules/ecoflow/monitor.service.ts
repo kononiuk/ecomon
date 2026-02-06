@@ -47,29 +47,52 @@ export class MonitorService implements OnModuleInit, OnModuleDestroy {
   // ── lifecycle ───────────────────────────────────────────────────────────────
 
   /**
-   * Boot-time auto-resume.  Reads every MonitorState row that is flagged
-   * isRunning === true and restarts the monitor for that user.  If resumption
-   * fails the row is flipped to stopped so a broken state does not retry
-   * on every subsequent boot.
+   * Boot-time auto-resume (non-blocking).
+   * Schedules monitor resume to run in background after server startup.
    */
   async onModuleInit(): Promise<void> {
-    const activeStates = await this.monitorStateRepo.find({
-      where: { isRunning: true },
-    });
+    // Schedule resume to run AFTER server starts (non-blocking)
+    void this.resumeActiveMonitors();
+  }
 
-    for (const state of activeStates) {
-      this.logger.log(`Resuming monitor for user ${state.userId} (persisted state)`);
-      try {
-        await this.startMonitoring(state.userId, state.devices);
-      } catch (err) {
-        this.logger.error(
-          `Failed to auto-resume monitor for user ${state.userId}`,
-          (err as Error).message,
-        );
-        state.isRunning = false;
-        state.stoppedAt = new Date();
-        await this.monitorStateRepo.save(state);
+  /**
+   * Resume active monitors asynchronously (non-blocking).
+   * Reads every MonitorState row that is flagged isRunning === true
+   * and restarts the monitor for that user. If resumption fails the
+   * row is flipped to stopped so a broken state does not retry on
+   * every subsequent boot.
+   *
+   * Runs independently after server startup completes.
+   */
+  private async resumeActiveMonitors(): Promise<void> {
+    try {
+      const activeStates = await this.monitorStateRepo.find({
+        where: { isRunning: true },
+      });
+
+      if (activeStates.length === 0) {
+        return;
       }
+
+      this.logger.log(`Found ${activeStates.length} active monitor(s) to resume`);
+
+      for (const state of activeStates) {
+        this.logger.log(`Resuming monitor for user ${state.userId} (persisted state)`);
+        try {
+          await this.startMonitoring(state.userId, state.devices);
+        } catch (err) {
+          this.logger.error(
+            `Failed to auto-resume monitor for user ${state.userId}`,
+            (err as Error).message,
+          );
+          // Mark as stopped on failure
+          state.isRunning = false;
+          state.stoppedAt = new Date();
+          await this.monitorStateRepo.save(state);
+        }
+      }
+    } catch (err) {
+      this.logger.error('Error during monitor resume', (err as Error).message);
     }
   }
 
