@@ -16,64 +16,78 @@ function formatTime(isoString) {
   });
 }
 
+
 /**
- * Generate horizontal timeline bar showing grid connection status
- * Returns formatted string with colored blocks for connected/disconnected periods
+ * Process raw history data into fixed 24-hour timeline with regular intervals
+ *
+ * @param {Array} rawHistory - Raw data points from database
+ * @param {number} intervalMinutes - Time interval in minutes (10, 20, or 30)
+ * @returns {Object} { timeLabels: string[], inputSeries: number[], outputSeries: number[] }
  */
-function generateGridTimeline(history) {
-  if (history.length === 0) {
-    return '{red-fg}' + '━'.repeat(96) + '{/red-fg} (no data yet)';
+function processDataForFixedTimeline(rawHistory, intervalMinutes = 10) {
+  const now = new Date();
+  const startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const intervalMs = intervalMinutes * 60 * 1000;
+  const numSlots = Math.floor((24 * 60) / intervalMinutes);
+
+  // Generate empty time slots
+  const timeSlots = [];
+  for (let i = 0; i < numSlots; i++) {
+    const slotTime = new Date(startTime.getTime() + i * intervalMs);
+    timeSlots.push({
+      timestamp: slotTime,
+      label: formatTime(slotTime.toISOString()),
+      inputWatts: 0,
+      outputWatts: 0,
+      count: 0
+    });
   }
 
-  // Sort by time
-  const sorted = [...history].sort((a, b) =>
-    new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime()
-  );
+  // Map raw data to time slots
+  rawHistory.forEach(point => {
+    const pointTime = new Date(point.recordedAt).getTime();
+    const elapsedMs = pointTime - startTime.getTime();
 
-  // Group consecutive same-state periods
-  const segments = [];
-  let currentState = sorted[0].gridConnected;
-  let startTime = new Date(sorted[0].recordedAt);
+    // Find the slot index (round to nearest)
+    const slotIndex = Math.round(elapsedMs / intervalMs);
 
-  sorted.forEach((point, idx) => {
-    if (point.gridConnected !== currentState || idx === sorted.length - 1) {
-      segments.push({
-        connected: currentState,
-        start: startTime,
-        end: new Date(point.recordedAt)
-      });
-      currentState = point.gridConnected;
-      startTime = new Date(point.recordedAt);
+    if (slotIndex >= 0 && slotIndex < numSlots) {
+      const slot = timeSlots[slotIndex];
+      const count = slot.count;
+
+      // Running average if multiple points map to same slot
+      slot.inputWatts = (slot.inputWatts * count + (point.inputWatts || 0)) / (count + 1);
+      slot.outputWatts = (slot.outputWatts * count + (point.outputWatts || 0)) / (count + 1);
+      slot.count++;
     }
   });
 
-  // Calculate total time span
-  const firstTime = new Date(sorted[0].recordedAt).getTime();
-  const lastTime = new Date(sorted[sorted.length - 1].recordedAt).getTime();
-  const totalDuration = lastTime - firstTime || 1;
+  // Extract arrays for chart
+  return {
+    timeLabels: timeSlots.map(slot => slot.label),
+    inputSeries: timeSlots.map(slot => Math.round(slot.inputWatts)),
+    outputSeries: timeSlots.map(slot => Math.round(slot.outputWatts))
+  };
+}
 
-  // Generate visual bar (96 chars wide for good resolution)
-  const barWidth = 96;
-  let timeline = '';
+/**
+ * Format a status entry for the event log
+ *
+ * @param {Object} status - Status object with battery, input, output, grid
+ * @returns {string} Formatted log line with colors
+ */
+function formatLogEntry(status) {
+  const battery = status.charge?.percent || status.batteryPercent || 0;
+  const input = status.inputWatts || 0;
+  const output = status.outputWatts || 0;
+  const grid = status.gridConnected;
 
-  segments.forEach(seg => {
-    const segStart = new Date(seg.start).getTime();
-    const segEnd = new Date(seg.end).getTime();
-    const segDuration = segEnd - segStart;
-    const segWidth = Math.max(1, Math.round((segDuration / totalDuration) * barWidth));
-
-    const color = seg.connected ? 'green-fg' : 'red-fg';
-    timeline += `{${color}}` + '━'.repeat(segWidth) + `{/${color}}`;
-  });
-
-  // Add time labels
-  const startLabel = formatTime(sorted[0].recordedAt);
-  const endLabel = formatTime(sorted[sorted.length - 1].recordedAt);
-  const duration = Math.round((totalDuration / 1000 / 60)); // minutes
-
-  return timeline + `\n{cyan-fg}${startLabel}{/cyan-fg}` +
-         ' '.repeat(barWidth - startLabel.length - endLabel.length - 2) +
-         `{cyan-fg}${endLabel}{/cyan-fg}  ({yellow-fg}${duration} min{/yellow-fg})`;
+  return (
+    `{cyan-fg}Battery:{/cyan-fg} ${battery}% | ` +
+    `{green-fg}Input:{/green-fg} ${input}W | ` +
+    `{cyan-fg}Output:{/cyan-fg} ${output}W | ` +
+    `{cyan-fg}Grid:{/cyan-fg} ${grid ? '{green-fg}Yes{/green-fg}' : '{red-fg}No{/red-fg}'}`
+  );
 }
 
 /**
@@ -122,15 +136,15 @@ const cmd = new Command('dashboard')
       });
 
       const grid = new contrib.grid({
-        rows: 12,
+        rows: 12,  // Power (10) + Device/Status (2)
         cols: 12,
         screen: screen
       });
 
       // ── Step 4: Create widgets ───────────────────────────────────────────────
 
-      // Power line graph (top - 7 rows)
-      const powerLine = grid.set(0, 0, 7, 12, contrib.line, {
+      // Power line graph (top - 10 rows)
+      const powerLine = grid.set(0, 0, 10, 12, contrib.line, {
         label: ` Power (Watts)  │ {green-fg}Input{/green-fg}  {cyan-fg}Output{/cyan-fg} `,
         showLegend: false,
         tags: true,
@@ -144,19 +158,8 @@ const cmd = new Command('dashboard')
         }
       });
 
-      // Grid connection timeline (middle - 2 rows)
-      const gridTimeline = grid.set(7, 0, 2, 12, blessed.box, {
-        label: ` Grid Connection Timeline `,
-        content: '',
-        tags: true,
-        style: {
-          fg: 'white',
-          border: { fg: 'yellow' }
-        }
-      });
-
-      // Device info box (bottom-middle - 2 rows)
-      const infoBox = grid.set(9, 0, 2, 12, blessed.box, {
+      // Device info box (bottom-left - 2 rows, 6 columns)
+      const infoBox = grid.set(10, 0, 2, 6, blessed.box, {
         label: ` Device Information `,
         content: '',
         tags: true,
@@ -166,10 +169,12 @@ const cmd = new Command('dashboard')
         }
       });
 
-      // Footer status box (bottom - 1 row)
-      const footer = grid.set(11, 0, 1, 12, blessed.box, {
-        label: ` Status `,
-        content: 'Initializing...',
+      // Rolling log (bottom-right - 2 rows, 6 columns)
+      const logWidget = grid.set(10, 6, 2, 6, contrib.log, {
+        label: ' Status History ',
+        fg: 'white',
+        selectedFg: 'green',
+        bufferLength: 50,
         tags: true,
         style: {
           fg: 'white',
@@ -182,10 +187,11 @@ const cmd = new Command('dashboard')
       // Sort history by timestamp (ascending - oldest first)
       history.sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime());
 
-      // Power graph data arrays
-      const timeLabels = history.map(h => formatTime(h.recordedAt));
-      const inputSeries = history.map(h => h.inputWatts || 0);
-      const outputSeries = history.map(h => h.outputWatts || 0);
+      // Process data into fixed 24-hour timeline with 10-minute intervals
+      const processed = processDataForFixedTimeline(history, 10);
+      const timeLabels = processed.timeLabels;
+      const inputSeries = processed.inputSeries;
+      const outputSeries = processed.outputSeries;
 
       // Set initial power chart data
       powerLine.setData([
@@ -203,19 +209,16 @@ const cmd = new Command('dashboard')
         }
       ]);
 
-      // Set initial grid connection timeline
-      gridTimeline.setContent('\n' + generateGridTimeline(history));
-
-      // ── Step 6: Helper function to update footer ─────────────────────────────
-      function updateFooter(message, color = 'white') {
-        footer.setContent(`{${color}-fg}${message}{/${color}-fg}`);
+      // Populate event log with last 5 history entries
+      if (history.length > 0) {
+        const recentHistory = history.slice(-5);  // Last 5 entries
+        recentHistory.forEach(entry => {
+          logWidget.log(formatLogEntry(entry));
+        });
       }
 
-      // ── Step 7: Polling loop ──────────────────────────────────────────────────
+      // ── Step 6: Polling loop ──────────────────────────────────────────────────
       const intervalMs = parseInt(opts.interval);
-
-      updateFooter('Loading initial data...', 'yellow');
-      screen.render();
 
       // Initial render with current status
       const initialStatus = statusRes.body;
@@ -228,7 +231,6 @@ const cmd = new Command('dashboard')
         `{cyan-fg}Grid:{/cyan-fg} ${initialStatus.gridConnected ? '{green-fg}Connected{/green-fg}' : '{red-fg}Disconnected{/red-fg}'}`
       );
 
-      updateFooter(`Last updated: ${new Date().toLocaleString()} | Refresh: ${intervalMs/1000}s`, 'green');
       screen.render();
 
       // Set up polling interval
@@ -238,7 +240,6 @@ const cmd = new Command('dashboard')
           const res = await api.getStatus(deviceSn);
 
           if (res.status !== 200) {
-            updateFooter(`Error: ${res.body?.message || 'Failed to fetch status'}`, 'red');
             screen.render();
             return;
           }
@@ -246,19 +247,7 @@ const cmd = new Command('dashboard')
           const status = res.body;
           const now = new Date();
 
-          // Append new data point to chart (sliding window)
-          timeLabels.push(formatTime(now.toISOString()));
-          inputSeries.push(status.inputWatts || 0);
-          outputSeries.push(status.outputWatts || 0);
-
-          // Keep only last 1440 points (24h at 1 per minute)
-          if (timeLabels.length > 1440) {
-            timeLabels.shift();
-            inputSeries.shift();
-            outputSeries.shift();
-          }
-
-          // Add new data point to history for grid chart
+          // Add new data point to history array
           history.push({
             deviceSn: deviceSn,
             batteryPercent: status.charge.percent,
@@ -268,28 +257,28 @@ const cmd = new Command('dashboard')
             recordedAt: now.toISOString()
           });
 
-          // Keep history to 24h
+          // Keep history to 24h (filter old points)
           const cutoffTime = Date.now() - 24 * 60 * 60 * 1000;
           history = history.filter(h => new Date(h.recordedAt).getTime() > cutoffTime);
 
-          // Update power graph
+          // Re-process entire history into fixed timeline
+          const processed = processDataForFixedTimeline(history, 10);
+
+          // Update power graph with processed data
           powerLine.setData([
             {
               title: 'Input',
-              x: timeLabels,
-              y: inputSeries,
+              x: processed.timeLabels,
+              y: processed.inputSeries,
               style: { line: 'green' }
             },
             {
               title: 'Output',
-              x: timeLabels,
-              y: outputSeries,
+              x: processed.timeLabels,
+              y: processed.outputSeries,
               style: { line: 'cyan' }
             }
           ]);
-
-          // Refresh grid connection timeline
-          gridTimeline.setContent('\n' + generateGridTimeline(history));
 
           // Update device info box
           infoBox.setContent(
@@ -301,12 +290,11 @@ const cmd = new Command('dashboard')
             `{cyan-fg}Grid:{/cyan-fg} ${status.gridConnected ? '{green-fg}Connected{/green-fg}' : '{red-fg}Disconnected{/red-fg}'}`
           );
 
-          // Update footer with timestamp
-          updateFooter(`Last updated: ${now.toLocaleString()} | Refresh: ${intervalMs/1000}s`, 'green');
+          // Add new entry to event log
+          logWidget.log(formatLogEntry(status));
 
           screen.render();
         } catch (err) {
-          updateFooter(`Error: ${err.message}`, 'red');
           screen.render();
         }
       }, intervalMs);
