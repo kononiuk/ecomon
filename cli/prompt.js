@@ -19,9 +19,9 @@ function text(question) {
 /** Password prompt — input is masked with asterisks */
 function password(question) {
   return new Promise((resolve) => {
-    const rl = createRL();
-    // Mute input on the raw stream so characters don't echo
     process.stdout.write(question);
+
+    // Set raw mode BEFORE creating readline to prevent echo
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
     process.stdin.setEncoding('utf8');
@@ -33,7 +33,6 @@ function password(question) {
         process.stdin.setRawMode?.(false);
         process.stdin.pause();
         process.stdout.write('\n');
-        rl.close();
         resolve(input);
       } else if (ch === '\u0003') { // Ctrl-C
         process.exit(130);
