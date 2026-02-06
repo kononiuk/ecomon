@@ -16,7 +16,7 @@ function text(question) {
   });
 }
 
-/** Password prompt — input is hidden */
+/** Password prompt — input is masked with asterisks */
 function password(question) {
   return new Promise((resolve) => {
     const rl = createRL();
@@ -38,9 +38,15 @@ function password(question) {
       } else if (ch === '\u0003') { // Ctrl-C
         process.exit(130);
       } else if (ch === '\u007f' || ch === '\b') { // backspace
-        input = input.slice(0, -1);
+        if (input.length > 0) {
+          input = input.slice(0, -1);
+          // Erase asterisk from display: backspace, space, backspace
+          process.stdout.write('\b \b');
+        }
       } else {
         input += ch;
+        // Display asterisk for the typed character
+        process.stdout.write('*');
       }
     };
     process.stdin.on('data', onData);
