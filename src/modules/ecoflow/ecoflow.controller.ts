@@ -9,20 +9,26 @@ import {
   UseGuards,
   Req,
   HttpCode,
+  Sse,
+  MessageEvent,
 } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiQuery,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
+import { Observable, from } from 'rxjs';
+import { map, filter, mergeMap } from 'rxjs/operators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { User } from '../auth/entities/user.entity';
 import { EcoflowService } from './ecoflow.service';
 import { MonitorService } from './monitor.service';
 import { HistoryService } from './history.service';
+import { DeviceUpdateEmitter } from './device-update.emitter';
 import { StoreCredentialsDto } from './dto/store-credentials.dto';
 import { DeviceCommandDto } from './dto/device-command.dto';
 
@@ -35,6 +41,7 @@ export class EcoflowController {
     private readonly ecoflowService: EcoflowService,
     private readonly monitorService: MonitorService,
     private readonly historyService: HistoryService,
+    private readonly emitter: DeviceUpdateEmitter,
   ) {}
 
   @Post('credentials')
@@ -164,6 +171,77 @@ export class EcoflowController {
       from ? new Date(from) : undefined,
       to ? new Date(to) : undefined,
       limit ? parseInt(limit, 10) : undefined,
+    );
+  }
+
+  // ── SSE stream ────────────────────────────────────────────────────────────
+
+  @Sse('monitor/stream')
+  @ApiOperation({ summary: 'SSE stream of device status updates' })
+  @ApiResponse({ status: 200, description: 'SSE stream of device-update events' })
+  @ApiQuery({
+    name: 'devices',
+    required: false,
+    description: 'Comma-separated device SNs to filter',
+  })
+  streamDeviceUpdates(
+    @CurrentUser() user: User,
+    @Query('devices') devicesParam?: string,
+  ): Observable<MessageEvent> {
+    // Parse device filter (optional)
+    const requestedDevices = devicesParam
+      ? devicesParam.split(',').map((s) => s.trim())
+      : null;
+
+    // Subscribe to all device updates, filter by user ownership + optional device list
+    return this.emitter.onUpdate().pipe(
+      mergeMap((history) =>
+        from(
+          (async () => {
+            try {
+              // Check user has EcoFlow credentials
+              const credential =
+                await this.ecoflowService.getActiveCredential(user.id);
+              if (!credential) return null;
+
+              // Verify device ownership
+              const devices = await this.ecoflowService.getDeviceList(user.id);
+              const ownsDevice = devices.data?.some(
+                (d: any) => d.sn === history.deviceSn,
+              );
+              if (!ownsDevice) return null;
+
+              // Optional: filter by specific devices
+              if (
+                requestedDevices &&
+                !requestedDevices.includes(history.deviceSn)
+              ) {
+                return null;
+              }
+
+              return history;
+            } catch {
+              return null;
+            }
+          })(),
+        ),
+      ),
+      filter((history) => history !== null),
+      map((history) => ({
+        data: JSON.stringify({
+          id: history!.id,
+          deviceSn: history!.deviceSn,
+          source: history!.source,
+          batteryPercent: history!.batteryPercent,
+          inputWatts: history!.inputWatts,
+          outputWatts: history!.outputWatts,
+          gridConnected: history!.gridConnected,
+          recordedAt: history!.recordedAt,
+          rawSnapshot: history!.rawSnapshot,
+        }),
+        id: history!.id,
+        type: 'device-update',
+      })),
     );
   }
 }

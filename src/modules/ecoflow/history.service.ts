@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan, LessThan, Between } from 'typeorm';
 import { DeviceStatusHistory } from './entities/device-status-history.entity';
+import { DeviceUpdateEmitter } from './device-update.emitter';
 
 export interface DataPoint {
   deviceSn: string;
@@ -17,6 +18,7 @@ export class HistoryService {
   constructor(
     @InjectRepository(DeviceStatusHistory)
     private readonly historyRepository: Repository<DeviceStatusHistory>,
+    private readonly emitter: DeviceUpdateEmitter,
   ) {}
 
   // ── field extraction ────────────────────────────────────────────────────────
@@ -82,7 +84,12 @@ export class HistoryService {
       recordedAt: new Date(),
     });
 
-    return this.historyRepository.save(row);
+    const saved = await this.historyRepository.save(row);
+
+    // Emit SSE event for real-time clients
+    this.emitter.emitUpdate(saved);
+
+    return saved;
   }
 
   // ── read ────────────────────────────────────────────────────────────────────
