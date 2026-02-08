@@ -6,6 +6,7 @@ import { DeviceStatusService } from './device-status.service';
 import { HistoryService } from './history.service';
 import { MonitorService } from './monitor.service';
 import { HistoryCleanupService } from './history-cleanup.service';
+import { DeviceUpdateEmitter } from './device-update.emitter';
 import { EcoFlowCredential } from './entities/ecoflow-credential.entity';
 import { DeviceStatusHistory } from './entities/device-status-history.entity';
 import { MonitorState } from './entities/monitor-state.entity';
@@ -27,6 +28,7 @@ import { AuthModule } from '../auth/auth.module';
     HistoryService,
     MonitorService,
     HistoryCleanupService,
+    DeviceUpdateEmitter,
   ],
   exports: [EcoflowService],
 })
