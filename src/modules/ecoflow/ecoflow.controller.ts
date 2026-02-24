@@ -15,6 +15,7 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiQuery,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -25,6 +26,10 @@ import { MonitorService } from './monitor.service';
 import { HistoryService } from './history.service';
 import { StoreCredentialsDto } from './dto/store-credentials.dto';
 import { DeviceCommandDto } from './dto/device-command.dto';
+import {
+  GetHistoryQueryDto,
+  HISTORY_PERIODS,
+} from './dto/get-history-query.dto';
 
 @ApiTags('ecoflow')
 @Controller('ecoflow')
@@ -147,23 +152,36 @@ export class EcoflowController {
   // ── history ───────────────────────────────────────────────────────────────
 
   @Get('monitor/history')
-  @ApiOperation({ summary: 'Query device status history' })
+  @ApiOperation({
+    summary: 'Query device status history',
+    description:
+      'Returns history rows newest-first. Use `period` for a quick relative ' +
+      'window (e.g. `24h`, `7d`) or supply explicit `from`/`to` ISO timestamps. ' +
+      '`period` takes precedence when both are provided.',
+  })
   @ApiResponse({ status: 200, description: 'Array of DeviceStatusHistory rows' })
+  @ApiQuery({ name: 'deviceSn', required: true, description: 'Device serial number' })
+  @ApiQuery({
+    name: 'period',
+    required: false,
+    enum: HISTORY_PERIODS,
+    description: 'Shorthand time window relative to now. Overrides from/to.',
+  })
+  @ApiQuery({ name: 'from', required: false, description: 'Start ISO 8601 timestamp (ignored when period is set)' })
+  @ApiQuery({ name: 'to', required: false, description: 'End ISO 8601 timestamp (ignored when period is set)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max rows to return (default 1000, max 5000)' })
   async getHistory(
     @CurrentUser() user: User,
-    @Query('deviceSn') deviceSn: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-    @Query('limit') limit?: string,
+    @Query() query: GetHistoryQueryDto,
   ) {
     // Validate that the user has active credentials (implicitly checks access)
     await this.ecoflowService.getDeviceList(user.id);
 
-    return this.historyService.getHistory(
-      deviceSn,
-      from ? new Date(from) : undefined,
-      to ? new Date(to) : undefined,
-      limit ? parseInt(limit, 10) : undefined,
-    );
+    return this.historyService.getHistory(query.deviceSn ?? '', {
+      period: query.period,
+      from: query.from ? new Date(query.from) : undefined,
+      to: query.to ? new Date(query.to) : undefined,
+      limit: query.limit,
+    });
   }
 }

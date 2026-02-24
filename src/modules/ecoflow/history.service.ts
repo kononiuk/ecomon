@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan, LessThan, Between } from 'typeorm';
 import { DeviceStatusHistory } from './entities/device-status-history.entity';
+import {
+  HistoryPeriod,
+  PERIOD_MS,
+} from './dto/get-history-query.dto';
 
 export interface DataPoint {
   deviceSn: string;
@@ -87,15 +91,35 @@ export class HistoryService {
 
   // ── read ────────────────────────────────────────────────────────────────────
   /**
-   * Query history for one device, optionally bounded by a time range.
-   * Returns newest rows first, capped at `limit` (default 200).
+   * Query history for one device with flexible time-range selection.
+   *
+   * Priority:
+   *   1. `period` shorthand  → resolves to [now - periodMs, now]   (ignores from/to)
+   *   2. `from` + `to`       → explicit closed range
+   *   3. `from` only         → open-ended from that point forward
+   *   4. `to` only           → everything up to that point
+   *   5. neither             → all rows for the device
+   *
+   * Returns newest rows first, capped at `limit` (default 1000, max 5000).
    */
   async getHistory(
     deviceSn: string,
-    from?: Date,
-    to?: Date,
-    limit: number = 200,
+    options: {
+      period?: HistoryPeriod;
+      from?: Date;
+      to?: Date;
+      limit?: number;
+    } = {},
   ): Promise<DeviceStatusHistory[]> {
+    const { period, limit = 1000 } = options;
+    let { from, to } = options;
+
+    // Period shorthand overrides explicit from/to
+    if (period) {
+      to = new Date();
+      from = new Date(Date.now() - PERIOD_MS[period]);
+    }
+
     const where: Record<string, unknown> = { deviceSn };
 
     if (from && to) {
