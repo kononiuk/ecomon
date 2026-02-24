@@ -40,4 +40,4 @@ lerna-debug.log*
 .env.*.local
 
 # Claude Code local settings
-.claude/settings.local.json
+.claude/
